@@ -1,0 +1,81 @@
+// prisma/schema.prisma
+// Configuração do Prisma ORM 6 para PostgreSQL (Neon Serverless)
+// Microsserviço: amiguinho-logistica-api
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Representa o ciclo de uma jornada de trabalho de um entregador.
+/// Criada quando o motorista inicia a rota e encerrada ao final do dia/expediente.
+model JornadaEntrega {
+  id               String    @id @default(uuid())
+  usuarioId        String    // ID do entregador (extraído do JWT da API principal)
+  veiculoId        String?   // Identificador do veículo ou placa (opcional)
+  dataInicio       DateTime  // Momento do início da jornada
+  dataFim          DateTime? // Momento de conclusão da jornada
+  status           String    @default("EM_ANDAMENTO") // 'EM_ANDAMENTO', 'FINALIZADA'
+  distanciaTotalKm Float?    @default(0) // Distância total calculada/informada em km
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relações
+  localizacoes     LocalizacaoEntrega[]
+  eventos          EventoEntrega[]
+
+  // Índices para consultas rápidas no painel de controle
+  @@index([usuarioId])
+  @@index([status])
+  @@index([dataInicio])
+  @@map("jornadas_entrega")
+}
+
+/// Pontos de telemetria GPS coletados em segundo plano pelo app cliente (SQLite local).
+/// Projetado para alta performance de escrita em lote e idempotência (o ID é gerado no app).
+model LocalizacaoEntrega {
+  id         String   @id // UUID v4 gerado no SQLite do celular para garantir idempotência
+  jornadaId  String
+  latitude   Float
+  longitude  Float
+  precisao   Float?   // Precisão em metros do sinal GPS
+  velocidade Float?   // Velocidade instantânea em km/h ou m/s
+  dataHora   DateTime // Timestamp real da captura GPS no aparelho
+  criadoEm   DateTime @default(now()) // Timestamp de chegada ao servidor
+
+  // Vínculo com a Jornada
+  jornada    JornadaEntrega @relation(fields: [jornadaId], references: [id], onDelete: Cascade)
+
+  // Índices para ordenação cronológica e expurgo semanal
+  @@index([jornadaId])
+  @@index([dataHora])
+  @@map("localizacoes_entrega")
+}
+
+/// Eventos operacionais realizados durante a rota (ex: baixa de entrega, tentativa frustrada, cliente ausente).
+/// Preserva a auditoria do ponto exato onde o entregador registrou o status do pedido.
+model EventoEntrega {
+  id         String   @id // UUID v4 gerado no cliente para idempotência
+  jornadaId  String
+  pedidoId   String   // UUID do pedido comercial na API principal
+  tipoEvento String   // 'BAIXA_ENTREGA', 'RETORNO_CLIENTE_AUSENTE', 'RECUSA_MERCADORIA', etc.
+  latitude   Float
+  longitude  Float
+  precisao   Float?
+  velocidade Float?
+  dataHora   DateTime // Timestamp de registro do evento no cliente
+  criadoEm   DateTime @default(now()) // Timestamp de persistência no servidor
+
+  // Vínculo com a Jornada
+  jornada    JornadaEntrega @relation(fields: [jornadaId], references: [id], onDelete: Cascade)
+
+  // Índices para busca por jornada e rastreio de auditoria por pedido
+  @@index([jornadaId])
+  @@index([pedidoId])
+  @@index([dataHora])
+  @@map("eventos_entrega")
+}
